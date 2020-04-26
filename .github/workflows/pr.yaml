@@ -1,0 +1,31 @@
+name: Test for PR
+
+on: pull_request
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions/setup-go@v1
+        with:
+          go-version: "1.14"
+      - name: setup env
+        run: |
+          echo "::set-env name=GOPATH::$(go env GOPATH)"
+          echo "::add-path::$(go env GOPATH)/bin"
+        shell: bash
+      - name: Install go tools
+        run: cat tools.go | awk -F'"' '/_/ {print $2}' | xargs -tI {} go install {}
+      - name: Check uncommitted changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+              echo "uncommitted changes"
+              git status
+              exit 1
+          fi
+      - name: go lint
+        run: go list ./... | xargs golint -set_exit_status
+      - run: go vet ./...
+      - run: go test -v -race ./...
