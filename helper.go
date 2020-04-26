@@ -25,7 +25,9 @@ var (
 	ErrCanceledByUser = errors.New("canceled by user")
 )
 
-// Screenshot is an action that captures screen and save as image file.
+// Screenshot is an action that takes a screenshot of the entire browser viewport and save as image file.
+// Note: this will override the viewport emulation settings.
+// This function is based on https://github.com/chromedp/examples
 func Screenshot(filename string) chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
 		// get layout metrics
