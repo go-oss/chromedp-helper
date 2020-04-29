@@ -138,14 +138,22 @@ func WaitResponse(urlstr interface{}, timeout time.Duration, acts ...chromedp.Ac
 		lctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
+		var requestID network.RequestID
 		var loaderID cdp.LoaderID
 		var frameID cdp.FrameID
 		chromedp.ListenTarget(lctx, func(ev interface{}) {
 			switch e := ev.(type) {
+			// Wait request event
+			case *network.EventRequestWillBeSent:
+				req := e.Request
+				if strings.HasPrefix(req.URL, u) {
+					requestID = e.RequestID
+					log.Printf("WaitResponse: request id=%s method=%s url=%s", e.RequestID, req.Method, req.URL)
+				}
+
 			// Handle network error
 			case *network.EventLoadingFailed:
-				switch e.Type {
-				case network.ResourceTypeDocument:
+				if requestID == e.RequestID {
 					log.Printf("WaitResponse: error=%s url=%s\n", e.ErrorText, u)
 					select {
 					case reloadCh <- struct{}{}:
@@ -163,8 +171,11 @@ func WaitResponse(urlstr interface{}, timeout time.Duration, acts ...chromedp.Ac
 						return
 					}
 					switch res.Status {
-					case http.StatusNotFound:
-						ch <- fmt.Errorf("not found url=%s", u)
+					case http.StatusBadRequest:
+						ch <- fmt.Errorf("status=BadRequest url=%s", u)
+						return
+					case http.StatusGone:
+						ch <- fmt.Errorf("status=Gone url=%s", u)
 						return
 					}
 					reloadCh <- struct{}{}
@@ -218,9 +229,8 @@ func WaitResponse(urlstr interface{}, timeout time.Duration, acts ...chromedp.Ac
 				}
 				if open {
 					log.Println("WaitResponse: reload")
-					<-timer.C
-					reload := page.Reload().WithIgnoreCache(true)
-					if err := reload.Do(ctx); err != nil {
+					<-ticker.C
+					if err := page.Reload().Do(ctx); err != nil {
 						return err
 					}
 					continue
