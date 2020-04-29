@@ -26,7 +26,9 @@ var (
 )
 
 // Screenshot is an action that takes a screenshot of the entire browser viewport and save as image file.
+//
 // Note: this will override the viewport emulation settings.
+//
 // This function is based on https://github.com/chromedp/examples
 func Screenshot(filename string) chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
@@ -94,10 +96,20 @@ func Navigate(urlstr interface{}, timeout time.Duration) chromedp.NavigateAction
 // IgnoreCacheReload is an action that reloads the current page without cache.
 func IgnoreCacheReload(timeout time.Duration) chromedp.NavigateAction {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
-		if err := page.Reload().WithIgnoreCache(true).Do(ctx); err != nil {
+		_, entries, err := page.GetNavigationHistory().Do(ctx)
+		if err != nil {
 			return err
 		}
-		return WaitLoaded(timeout).Do(ctx)
+		currentURL := entries[len(entries)-1].URL
+		log.Printf("IgnoreCacheReload: current=%s\n", currentURL)
+		return WaitResponse(currentURL, timeout,
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				if err := page.Reload().WithIgnoreCache(true).Do(ctx); err != nil {
+					return err
+				}
+				return nil
+			}),
+		).Do(ctx)
 	})
 }
 
@@ -195,6 +207,9 @@ func WaitResponse(urlstr interface{}, timeout time.Duration, acts ...chromedp.Ac
 		}
 		log.Printf("WaitResponse: timeout=%s\n", timeout)
 		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
 		for {
 			select {
 			case err, open := <-ch:
@@ -203,7 +218,7 @@ func WaitResponse(urlstr interface{}, timeout time.Duration, acts ...chromedp.Ac
 				}
 				if open {
 					log.Println("WaitResponse: reload")
-					time.Sleep(time.Second)
+					<-timer.C
 					reload := page.Reload().WithIgnoreCache(true)
 					if err := reload.Do(ctx); err != nil {
 						return err
@@ -235,6 +250,7 @@ func WaitLoaded(timeout time.Duration) chromedp.Action {
 		})
 		log.Printf("WaitLoaded: timeout=%s\n", timeout)
 		timer := time.NewTimer(timeout)
+		defer timer.Stop()
 		select {
 		case <-ch:
 			return nil
