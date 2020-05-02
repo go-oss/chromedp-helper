@@ -6,13 +6,13 @@ import (
 )
 
 // URL returns url string from endpoint and path.
-func URL(endpoint, path string, val ...*string) Stringer {
+func URL(endpoint, path string, val ...*string) fmt.Stringer {
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		panic(err)
 	}
 
-	return func() string {
+	return stringer(func() string {
 		if len(val) == 0 {
 			u.Path = path
 			return u.String()
@@ -20,23 +20,23 @@ func URL(endpoint, path string, val ...*string) Stringer {
 
 		u.Path = format(path, val...).String()
 		return u.String()
-	}
+	})
 }
 
-func format(format string, val ...*string) Stringer {
-	return func() string {
+func format(format string, val ...*string) fmt.Stringer {
+	return stringer(func() string {
 		vs := make([]interface{}, 0, len(val))
 		for _, v := range val {
 			vs = append(vs, *v)
 		}
 		return fmt.Sprintf(format, vs...)
-	}
+	})
 }
 
-// Stringer implements fmt.Stringer.
-type Stringer func() string
+// stringer implements fmt.Stringer.
+type stringer func() string
 
-func (s Stringer) String() string {
+func (s stringer) String() string {
 	return s()
 }
 

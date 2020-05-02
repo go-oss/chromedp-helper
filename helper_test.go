@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -66,17 +68,7 @@ func TestMain(m *testing.M) {
 
 func testAllocate(tb testing.TB) (context.Context, context.CancelFunc) {
 	allocateOnce.Do(func() {
-		ctx, _ := chromedp.NewContext(allocCtx, browserOpts...)
-		if err := chromedp.Run(ctx); err != nil {
-			tb.Fatal(err)
-		}
-		chromedp.ListenBrowser(ctx, func(ev interface{}) {
-			switch ev := ev.(type) {
-			case *cdpruntime.EventExceptionThrown:
-				tb.Errorf("%+v\n", ev.ExceptionDetails)
-			}
-		})
-		browserCtx = ctx
+		browserCtx, _ = testAllocateSeparate(tb)
 	})
 
 	if browserCtx == nil {
@@ -93,12 +85,64 @@ func testAllocate(tb testing.TB) (context.Context, context.CancelFunc) {
 	return ctx, cancel
 }
 
+func testAllocateSeparate(tb testing.TB) (context.Context, context.CancelFunc) {
+	ctx, _ := chromedp.NewContext(allocCtx, browserOpts...)
+	if err := chromedp.Run(ctx); err != nil {
+		tb.Fatal(err)
+	}
+	chromedp.ListenBrowser(ctx, func(ev interface{}) {
+		switch ev := ev.(type) {
+		case *cdpruntime.EventExceptionThrown:
+			tb.Errorf("%+v\n", ev.ExceptionDetails)
+		}
+	})
+	cancel := func() {
+		if err := chromedp.Cancel(ctx); err != nil {
+			tb.Error(err)
+		}
+	}
+	return ctx, cancel
+}
+
 func testStartServer(tb testing.TB) string {
 	startServerOnce.Do(func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/image.png", func(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(2 * time.Second)
 			http.ServeFile(w, r, filepath.Join(testdataDir, "image.png"))
+		})
+		mux.HandleFunc("/cookies", func(w http.ResponseWriter, r *http.Request) {
+			http.SetCookie(w, &http.Cookie{
+				Name:  "test-cookie-01",
+				Value: "testval01",
+				Path:  "/cookies",
+			})
+			http.SetCookie(w, &http.Cookie{
+				Name:     "test-cookie-02",
+				Value:    "testval02",
+				Path:     "/cookies",
+				HttpOnly: true,
+			})
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ok"))
+		})
+		mux.HandleFunc("/restore-cookies", func(w http.ResponseWriter, r *http.Request) {
+			c1, err := r.Cookie("test-cookie-01")
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			c2, err := r.Cookie("test-cookie-02")
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if c1.Value != "testval01" || c2.Value != "testval02" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ok"))
 		})
 		mux.Handle("/", http.FileServer(http.Dir(testdataDir)))
 		testServer = httptest.NewServer(mux)
@@ -121,7 +165,7 @@ func TestScreenshot(t *testing.T) {
 		t.Fatalf("failed to create temporary directory: %v", err)
 	}
 	sspath := filepath.Join(dir, "screenshot.png")
-	log.Println("sspath:", sspath)
+	log.Println("path:", sspath)
 
 	tasks := chromedp.Tasks{
 		chromedp.Navigate(testdataURL + "/screenshot.html"),
@@ -367,5 +411,107 @@ func TestWaitForTime(t *testing.T) {
 				t.Fatalf("%#v != %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSaveCookies(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := testAllocateSeparate(t)
+	defer cancel()
+	endpoint := testStartServer(t)
+
+	dir, err := ioutil.TempDir("", "chromedp-helper-test")
+	if err != nil {
+		t.Fatalf("failed to create temporary directory: %v", err)
+	}
+	cpath := filepath.Join(dir, "cookies.jsonl")
+	log.Println("path:", cpath)
+
+	priorityMap := func(c *network.Cookie) { c.Priority = network.CookiePriorityMedium }
+	tasks := chromedp.Tasks{
+		chromedp.Navigate(endpoint + "/cookies"),
+		SaveCookies(cpath, priorityMap),
+	}
+	if err := chromedp.Run(ctx, tasks); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.Open(cpath)
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	want := []string{
+		`{"name":"test-cookie-01","value":"testval01","domain":"127.0.0.1","path":"/cookies","expires":-1,"size":23,"httpOnly":false,"secure":false,"session":true,"priority":"Medium"}`,
+		`{"name":"test-cookie-02","value":"testval02","domain":"127.0.0.1","path":"/cookies","expires":-1,"size":23,"httpOnly":true,"secure":false,"session":true,"priority":"Medium"}`,
+	}
+	got := make([]string, 0, 2)
+	for s.Scan() {
+		got = append(got, s.Text())
+	}
+	if len(got) != len(want) {
+		t.Fatalf("invalid length\nwant: %d, got: %d", len(want), len(got))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("\nwant[%d]: %+v\n got[%d]: %+v", i, want[i], i, got[i])
+		}
+	}
+}
+
+func TestRestoreCookies(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := testAllocateSeparate(t)
+	defer cancel()
+	endpoint := testStartServer(t)
+
+	domainFilter := func(c *network.Cookie) bool { return c.Domain != "example.com" }
+	var got []*network.Cookie
+	var status string
+	tasks := chromedp.Tasks{
+		RestoreCookies(filepath.Join(testdataDir, "cookies.jsonl"), domainFilter),
+		chromedp.Navigate(endpoint + "/restore-cookies"),
+		chromedp.Text("body", &status),
+		chromedp.ActionFunc(func(ctx context.Context) (err error) {
+			got, err = network.GetAllCookies().Do(ctx)
+			return
+		}),
+	}
+	if err := chromedp.Run(ctx, tasks); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []*network.Cookie{
+		{
+			Name:     "test-cookie-01",
+			Value:    "testval01",
+			Domain:   "127.0.0.1",
+			Path:     "/restore-cookies",
+			Expires:  -1,
+			Size:     23,
+			Session:  true,
+			Priority: network.CookiePriorityMedium,
+		},
+		{
+			Name:     "test-cookie-02",
+			Value:    "testval02",
+			Domain:   "127.0.0.1",
+			Path:     "/restore-cookies",
+			Expires:  -1,
+			Size:     23,
+			HTTPOnly: true,
+			Session:  true,
+			Priority: network.CookiePriorityMedium,
+		},
+	}
+	if status != "ok" {
+		t.Fatal("cookie check failed: status is not ok")
+	}
+	if len(got) != len(want) {
+		t.Fatalf("invalid length\nwant: %d, got: %d", len(want), len(got))
+	}
+	for i := range want {
+		got[i].Priority = network.CookiePriorityMedium // set priority because it is not set by linux chrome
+		if !reflect.DeepEqual(got[i], want[i]) {
+			t.Fatalf("\nwant[%d]: %+v\n got[%d]: %+v", i, want[i], i, got[i])
+		}
 	}
 }

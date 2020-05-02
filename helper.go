@@ -3,6 +3,7 @@ package helper
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -30,7 +31,7 @@ var (
 // Note: this will override the viewport emulation settings.
 //
 // This function is based on https://github.com/chromedp/examples
-func Screenshot(filename string) chromedp.Action {
+func Screenshot(filename interface{}) chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
 		// get layout metrics
 		_, _, contentSize, err := page.GetLayoutMetrics().Do(ctx)
@@ -66,7 +67,7 @@ func Screenshot(filename string) chromedp.Action {
 		}
 
 		// save screenshot
-		f, err := os.Create(filename)
+		f, err := os.Create(toString(filename))
 		if err != nil {
 			return err
 		}
@@ -315,5 +316,95 @@ func WaitForTime(t time.Time) chromedp.Action {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	})
+}
+
+// SaveCookies is an action that saves cookies as json lines file.
+func SaveCookies(filename interface{}, maps ...func(*network.Cookie)) chromedp.Action {
+	mapFunc := func(c *network.Cookie) {
+		for _, m := range maps {
+			m(c)
+		}
+	}
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		cookies, err := network.GetAllCookies().Do(ctx)
+		if err != nil {
+			return err
+		}
+
+		log.Printf("SaveCookies: cookie(s)=%d\n", len(cookies))
+		f, err := os.OpenFile(toString(filename), os.O_WRONLY|os.O_CREATE, 0644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if err := f.Truncate(0); err != nil {
+			return err
+		}
+		e := json.NewEncoder(f)
+		for _, c := range cookies {
+			mapFunc(c)
+			e.Encode(c)
+		}
+
+		return f.Sync()
+	})
+}
+
+// RestoreCookies is an action that restores cookies from json lines file.
+func RestoreCookies(filename interface{}, filters ...func(*network.Cookie) bool) chromedp.Action {
+	filter := func(c network.Cookie) bool {
+		for _, f := range filters {
+			if !f(&c) {
+				return false
+			}
+		}
+		return true
+	}
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		f, err := os.Open(toString(filename))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		defer f.Close()
+		d := json.NewDecoder(f)
+		cookies := make([]*network.Cookie, 0)
+		for {
+			var c network.Cookie
+			if err := d.Decode(&c); err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				return err
+			}
+			if filter(c) {
+				cookies = append(cookies, &c)
+			}
+		}
+		log.Printf("RestoreCookies: cookie(s)=%d\n", len(cookies))
+
+		// add cookies to browser
+		for _, c := range cookies {
+			expires := cdp.TimeSinceEpoch(time.Time{}.Add(time.Duration(c.Expires) * time.Second))
+			success, err := network.SetCookie(c.Name, c.Value).
+				WithDomain(c.Domain).
+				WithPath(c.Path).
+				WithSecure(c.Secure).
+				WithHTTPOnly(c.HTTPOnly).
+				WithSameSite(c.SameSite).
+				WithExpires(&expires).
+				WithPriority(c.Priority).
+				Do(ctx)
+			if err != nil {
+				return err
+			}
+			if !success {
+				return fmt.Errorf("could not set cookie %s to %s", c.Name, c.Value)
+			}
+		}
+		return nil
 	})
 }
