@@ -30,7 +30,7 @@ var (
 // Note: this will override the viewport emulation settings.
 //
 // This function is based on https://github.com/chromedp/examples
-func Screenshot(filename string) chromedp.Action {
+func Screenshot(filename interface{}) chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
 		// get layout metrics
 		_, _, contentSize, err := page.GetLayoutMetrics().Do(ctx)
@@ -66,7 +66,7 @@ func Screenshot(filename string) chromedp.Action {
 		}
 
 		// save screenshot
-		f, err := os.Create(filename)
+		f, err := os.Create(toString(filename))
 		if err != nil {
 			return err
 		}
