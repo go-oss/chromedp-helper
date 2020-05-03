@@ -45,6 +45,9 @@ func toString(val interface{}) string {
 	case string:
 		return v
 
+	case *string:
+		return *v
+
 	case fmt.Stringer:
 		return v.String()
 
