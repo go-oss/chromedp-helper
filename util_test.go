@@ -108,6 +108,14 @@ func TestToString(t *testing.T) {
 			want:  "str",
 		},
 		{
+			name: "string pointer",
+			value: func() *string {
+				str := "strp"
+				return &str
+			}(),
+			want: "strp",
+		},
+		{
 			name:  "fmt.Stringer implemented",
 			value: testStringer(180),
 			want:  "180",

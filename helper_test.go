@@ -124,7 +124,7 @@ func testStartServer(tb testing.TB) string {
 				HttpOnly: true,
 			})
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("ok"))
+			io.WriteString(w, "ok")
 		})
 		mux.HandleFunc("/restore-cookies", func(w http.ResponseWriter, r *http.Request) {
 			c1, err := r.Cookie("test-cookie-01")
@@ -142,7 +142,7 @@ func testStartServer(tb testing.TB) string {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("ok"))
+			io.WriteString(w, "ok")
 		})
 		mux.Handle("/", http.FileServer(http.Dir(testdataDir)))
 		testServer = httptest.NewServer(mux)

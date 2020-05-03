@@ -31,6 +31,8 @@ var (
 // Note: this will override the viewport emulation settings.
 //
 // This function is based on https://github.com/chromedp/examples
+//
+// filename can be specified by string, string pointer or fmt.Stringer.
 func Screenshot(filename interface{}) chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
 		// get layout metrics
@@ -84,6 +86,8 @@ func Screenshot(filename interface{}) chromedp.Action {
 }
 
 // Navigate is an action that navigates the current frame.
+//
+// urlstr can be specified by string, string pointer or fmt.Stringer.
 func Navigate(urlstr interface{}, timeout time.Duration) chromedp.NavigateAction {
 	return WaitResponse(urlstr, timeout,
 		chromedp.ActionFunc(func(ctx context.Context) error {
@@ -130,6 +134,8 @@ func EnableLifeCycleEvents() chromedp.Action {
 }
 
 // WaitResponse is an action that waits until response received or timeout exceeded.
+//
+// urlstr can be specified by string, string pointer or fmt.Stringer.
 func WaitResponse(urlstr interface{}, timeout time.Duration, acts ...chromedp.Action) chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
 		u := toString(urlstr)
@@ -320,6 +326,8 @@ func WaitForTime(t time.Time) chromedp.Action {
 }
 
 // SaveCookies is an action that saves cookies as json lines file.
+//
+// filename can be specified by string, string pointer or fmt.Stringer.
 func SaveCookies(filename interface{}, maps ...func(*network.Cookie)) chromedp.Action {
 	mapFunc := func(c *network.Cookie) {
 		for _, m := range maps {
@@ -352,6 +360,8 @@ func SaveCookies(filename interface{}, maps ...func(*network.Cookie)) chromedp.A
 }
 
 // RestoreCookies is an action that restores cookies from json lines file.
+//
+// filename can be specified by string, string pointer or fmt.Stringer.
 func RestoreCookies(filename interface{}, filters ...func(*network.Cookie) bool) chromedp.Action {
 	filter := func(c network.Cookie) bool {
 		for _, f := range filters {
